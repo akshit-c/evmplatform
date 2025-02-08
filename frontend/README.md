@@ -68,3 +68,35 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+
+Your app will be running at `http://localhost:3000`
+
+## Design Philosophy
+
+We've embraced minimalism with:
+- Clean black and white color scheme
+- Focused, distraction-free interface
+- Responsive design that works on all devices
+- Intuitive navigation and user flow
+
+## Need Help?
+
+- Having trouble? Check if the backend server is running
+- Make sure your environment variables are set correctly
+- Check your browser console for any error messages
+
+## Contributing
+
+We love contributions! If you have suggestions or find bugs:
+1. Fork the repository
+2. Create your feature branch
+3. Make your changes
+4. Submit a pull request
+
+## Learn More
+
+This project was built with:
+- React.js for the UI
+- Socket.IO for real-time updates
+- JWT for authentication
+- Date-fns for date formatting
