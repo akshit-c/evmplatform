@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -6,22 +7,29 @@ const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const cloudinary = require('cloudinary').v2;
 const app = express();
 
 // Create HTTP server
 const server = http.createServer(app);
 
-// Socket.IO setup
+// Socket.IO setup with CORS
 const io = new Server(server, {
   cors: {
     origin: "http://localhost:3000",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false
+  },
+  transports: ['websocket', 'polling']
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: "http://localhost:3000",
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false
+}));
 app.use(express.json());
 
 // Connect to MongoDB
@@ -31,13 +39,6 @@ mongoose.connect(process.env.MONGODB_URI, {
 })
 .then(() => console.log('Connected to MongoDB'))
 .catch(err => console.error('MongoDB connection error:', err));
-
-// Add Cloudinary configuration
-cloudinary.config({ 
-  cloud_name: 'your_cloud_name', 
-  api_key: 'your_api_key', 
-  api_secret: 'your_api_secret' 
-});
 
 // User Schema
 const userSchema = new mongoose.Schema({
@@ -103,82 +104,19 @@ const eventSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  organizerName: {  // Add this field
+    type: String,
+    trim: true
+  },
   createdAt: { 
     type: Date, 
     default: Date.now 
-  },
-  image: {
-    url: String,
-    public_id: String
   }
 });
 
 const Event = mongoose.model('Event', eventSchema);
 
-// Socket.IO event handlers
-io.on('connection', (socket) => {
-  console.log('A user connected');
-
-  // Listen for new events
-  socket.on('newEvent', async (eventData) => {
-    try {
-      const event = new Event(eventData);
-      const savedEvent = await event.save();
-      // Broadcast the new event to all connected clients
-      io.emit('eventCreated', savedEvent);
-    } catch (error) {
-      socket.emit('eventError', error.message);
-    }
-  });
-
-  socket.on('disconnect', () => {
-    console.log('User disconnected');
-  });
-});
-
-// Routes
-app.get('/', (req, res) => {
-  res.json({ message: 'Backend is running' });
-});
-
-app.get('/api/events', async (req, res) => {
-  try {
-    const events = await Event.find()
-      .populate('creator', '_id name email')
-      .sort({ date: 1 });
-    
-    // Convert events to include string IDs
-    const formattedEvents = events.map(event => ({
-      ...event.toObject(),
-      _id: event._id.toString(),
-      creator: {
-        ...event.creator.toObject(),
-        _id: event.creator._id.toString()
-      }
-    }));
-    
-    res.json(formattedEvents);
-  } catch (error) {
-    console.error('Error fetching events:', error);
-    res.status(500).json({ message: 'Error fetching events' });
-  }
-});
-
-app.get('/api/auth/test', (req, res) => {
-  res.json({ message: 'Auth endpoint is working' });
-});
-
-app.use((req, res, next) => {
-  console.log('Incoming request:', {
-    method: req.method,
-    path: req.path,
-    body: req.body,
-    headers: req.headers
-  });
-  next();
-});
-
-// Auth Middleware
+// Auth Middleware - Define this BEFORE using it in routes
 const auth = async (req, res, next) => {
   try {
     const token = req.header('Authorization')?.replace('Bearer ', '');
@@ -196,19 +134,154 @@ const auth = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
+    console.error('Auth error:', error);
     res.status(401).json({ message: 'Authentication failed' });
   }
 };
+
+// Routes
+app.get('/', (req, res) => {
+  res.json({ message: 'Backend is running' });
+});
+
+app.get('/api/events', auth, async (req, res) => {
+  try {
+    const events = await Event.find()
+      .populate('creator', 'name email')
+      .sort({ date: 1 });
+    
+    res.json(events);
+  } catch (error) {
+    console.error('Error fetching events:', error);
+    res.status(500).json({ message: 'Error fetching events' });
+  }
+});
+
+app.get('/api/auth/test', (req, res) => {
+  res.json({ message: 'Auth endpoint is working' });
+});
+
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path}`, {
+    body: req.body,
+    query: req.query,
+    params: req.params,
+    headers: req.headers
+  });
+  next();
+});
+
+// Event Routes
+app.post('/api/events', auth, async (req, res) => {
+  try {
+    console.log('Creating event with data:', req.body);
+    console.log('User:', req.user);
+
+    const { name, description, date, location } = req.body;
+
+    // Validate required fields
+    if (!name || !description || !date || !location) {
+      return res.status(400).json({ 
+        message: 'All fields are required' 
+      });
+    }
+
+    const event = new Event({
+      name,
+      description,
+      date: new Date(date),
+      location,
+      creator: req.user._id
+    });
+
+    const savedEvent = await event.save();
+    const populatedEvent = await Event.findById(savedEvent._id)
+      .populate('creator', 'name email');
+
+    console.log('Event created:', populatedEvent);
+
+    // Emit event to connected clients
+    io.emit('eventCreated', populatedEvent);
+    
+    res.status(201).json(populatedEvent);
+  } catch (error) {
+    console.error('Error creating event:', error);
+    res.status(500).json({ 
+      message: 'Failed to create event',
+      error: error.message 
+    });
+  }
+});
+
+app.get('/api/events/:id', auth, async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id)
+      .populate('creator', 'name email');
+    
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+
+    res.json(event);
+  } catch (error) {
+    console.error('Error fetching event:', error);
+    res.status(500).json({ message: 'Error fetching event details' });
+  }
+});
+
+app.put('/api/events/:id', auth, async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id);
+    
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+
+    if (event.creator.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to update this event' });
+    }
+
+    const updates = req.body;
+    Object.keys(updates).forEach(key => {
+      event[key] = updates[key];
+    });
+
+    await event.save();
+    res.json({ message: 'Event updated successfully', event });
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating event' });
+  }
+});
+
+app.delete('/api/events/:id', auth, async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id);
+    
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+
+    if (event.creator.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to delete this event' });
+    }
+
+    await Event.findByIdAndDelete(req.params.id);
+    
+    // Emit event deletion through socket
+    io.emit('eventDeleted', req.params.id);
+    
+    res.json({ message: 'Event deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting event:', error);
+    res.status(500).json({ message: 'Error deleting event' });
+  }
+});
 
 // Auth Routes
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: 'All fields are required' });
-    }
-
+    
     const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return res.status(400).json({ message: 'Email already registered' });
@@ -216,21 +289,20 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 12);
     const user = new User({
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
+      name,
+      email: email.toLowerCase(),
       password: hashedPassword
     });
 
     await user.save();
 
     const token = jwt.sign(
-      { userId: user._id },
+      { userId: user._id, email: user.email, name: user.name },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
     res.status(201).json({
-      message: 'Registration successful',
       token,
       user: {
         id: user._id,
@@ -250,35 +322,30 @@ app.post('/api/auth/login', async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+      return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Convert ObjectId to string for consistent comparison
     const token = jwt.sign(
-      { 
-        userId: user._id.toString(), // Convert to string
-        email: user.email,
-        name: user.name
-      },
+      { userId: user._id, email: user.email, name: user.name },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
-    res.json({ 
+    res.json({
       token,
       user: {
-        id: user._id.toString(),
-        email: user.email,
-        name: user.name
+        id: user._id,
+        name: user.name,
+        email: user.email
       }
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error logging in' });
+    res.status(500).json({ message: 'Login failed' });
   }
 });
 
@@ -385,124 +452,29 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
-// Event Routes
-app.post('/api/events', auth, async (req, res) => {
-  try {
-    const { name, description, date, location } = req.body;
-
-    if (!name || !description || !date || !location) {
-      return res.status(400).json({ message: 'All fields are required' });
-    }
-
-    const event = new Event({
-      name,
-      description,
-      date,
-      location,
-      creator: req.user._id
-    });
-
-    const savedEvent = await event.save();
-    const populatedEvent = await Event.findById(savedEvent._id)
-      .populate('creator', '_id name email');
-
-    io.emit('eventCreated', populatedEvent);
-    res.status(201).json(populatedEvent);
-  } catch (error) {
-    console.error('Event creation error:', error);
-    res.status(500).json({ message: 'Failed to create event' });
-  }
+// Socket.IO connection handling
+io.on('connect_error', (error) => {
+  console.error('Socket connection error:', error);
 });
 
-app.get('/api/events/:id', auth, async (req, res) => {
-  try {
-    console.log('Event details request:', {
-      eventId: req.params.id,
-      userId: req.user._id,
-      authHeader: req.headers.authorization
-    });
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
+  
+  socket.on('error', (error) => {
+    console.error('Socket error:', error);
+  });
 
-    const event = await Event.findById(req.params.id)
-      .populate('creator', '_id name email');
-    
-    if (!event) {
-      console.log('Event not found:', req.params.id);
-      return res.status(404).json({ message: 'Event not found' });
-    }
-
-    console.log('Event found:', {
-      id: event._id,
-      name: event.name,
-      creator: event.creator._id
-    });
-
-    const formattedEvent = {
-      ...event.toObject(),
-      _id: event._id.toString(),
-      creator: event.creator ? {
-        ...event.creator.toObject(),
-        _id: event.creator._id.toString()
-      } : null
-    };
-    
-    res.json(formattedEvent);
-  } catch (error) {
-    console.error('Error in /api/events/:id:', error);
-    res.status(500).json({ 
-      message: 'Error fetching event details',
-      error: error.message 
-    });
-  }
-});
-
-app.put('/api/events/:id', auth, async (req, res) => {
-  try {
-    const event = await Event.findById(req.params.id);
-    
-    if (!event) {
-      return res.status(404).json({ message: 'Event not found' });
-    }
-
-    if (event.creator.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Not authorized to update this event' });
-    }
-
-    const updates = req.body;
-    Object.keys(updates).forEach(key => {
-      event[key] = updates[key];
-    });
-
-    await event.save();
-    res.json({ message: 'Event updated successfully', event });
-  } catch (error) {
-    res.status(500).json({ message: 'Error updating event' });
-  }
-});
-
-app.delete('/api/events/:id', auth, async (req, res) => {
-  try {
-    const event = await Event.findById(req.params.id);
-    
-    if (!event) {
-      return res.status(404).json({ message: 'Event not found' });
-    }
-
-    if (event.creator.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Not authorized to delete this event' });
-    }
-
-    await Event.findByIdAndDelete(req.params.id);
-    
-    // Emit event deletion through socket
-    io.emit('eventDeleted', req.params.id);
-    
-    res.json({ message: 'Event deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting event:', error);
-    res.status(500).json({ message: 'Error deleting event' });
-  }
+  socket.on('disconnect', (reason) => {
+    console.log('Client disconnected:', reason);
+  });
 });
 
 // Start the server
 const PORT = process.env.PORT || 5001;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// Add this after your routes
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({ message: 'Internal server error', error: err.message });
+});
