@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import axios from '../utils/axios';
-import io from 'socket.io-client';
 import { format } from 'date-fns';
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import io from 'socket.io-client';
 import { useAuth } from '../context/AuthContext';
+import axios from '../utils/axios';
 
-const socketUrl = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5001';
+// Use environment variable or fallback to localhost
+const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5001';
 
 const EventDashboard = () => {
   const [events, setEvents] = useState([]);
@@ -17,10 +18,28 @@ const EventDashboard = () => {
   const { user } = useAuth();
 
   useEffect(() => {
-    const socket = io(socketUrl);
+    // Create socket connection
+    const socket = io(SOCKET_URL, {
+      transports: ['websocket', 'polling'],
+      withCredentials: false,
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000
+    });
+
+    socket.on('connect', () => {
+      console.log('Socket connected successfully');
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error.message);
+    });
 
     socket.on('eventCreated', (newEvent) => {
-      setEvents(prev => [...prev, newEvent].sort((a, b) => new Date(a.date) - new Date(b.date)));
+      setEvents(prev => [...prev, newEvent].sort((a, b) => 
+        new Date(a.date) - new Date(b.date)
+      ));
     });
 
     socket.on('eventUpdated', (updatedEvent) => {
@@ -33,7 +52,10 @@ const EventDashboard = () => {
       setEvents(prev => prev.filter(event => event._id !== eventId));
     });
 
-    return () => socket.disconnect();
+    // Cleanup on unmount
+    return () => {
+      if (socket) socket.disconnect();
+    };
   }, []);
 
   useEffect(() => {
@@ -43,20 +65,13 @@ const EventDashboard = () => {
   const fetchEvents = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/api/events');
-      let filteredEvents = response.data;
-
-      // Debug log
-      console.log('Current user:', user);
-      console.log('Fetched events:', filteredEvents);
-      filteredEvents.forEach(event => {
-        console.log('Event:', {
-          id: event._id,
-          name: event.name,
-          creatorId: event.creator?._id || event.creator,
-          isCreator: user && (user.id === event.creator?._id || user.id === event.creator)
-        });
+      const response = await axios.get('/api/events', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
       });
+
+      let filteredEvents = response.data;
 
       // Apply filters
       if (filter === 'upcoming') {
@@ -73,9 +88,15 @@ const EventDashboard = () => {
       }
 
       setEvents(filteredEvents);
+      setError('');
     } catch (err) {
-      setError('Failed to fetch events');
       console.error('Error fetching events:', err);
+      if (err.response?.status === 401) {
+        setError('Please log in to view events');
+        setTimeout(() => navigate('/login'), 1500);
+      } else {
+        setError(err.response?.data?.message || 'Failed to fetch events');
+      }
     } finally {
       setLoading(false);
     }
@@ -101,11 +122,6 @@ const EventDashboard = () => {
       console.error('Error deleting event:', err);
       setError(err.response?.data?.message || 'Failed to delete event');
     }
-  };
-
-  const handleEditEvent = (eventId, e) => {
-    e.stopPropagation();
-    navigate(`/edit-event/${eventId}`);
   };
 
   const handleEventClick = (eventId) => {
@@ -176,13 +192,6 @@ const EventDashboard = () => {
                 {isCreator && (
                   <div className="event-actions">
                     <button 
-                      className="edit-btn"
-                      onClick={(e) => handleEditEvent(event._id, e)}
-                      title="Edit Event"
-                    >
-                      ✏️
-                    </button>
-                    <button 
                       className="delete-btn"
                       onClick={(e) => handleDeleteEvent(event._id, e)}
                       title="Delete Event"
@@ -192,13 +201,27 @@ const EventDashboard = () => {
                   </div>
                 )}
                 <div className="event-date">
-                  {format(new Date(event.date), 'MMM dd, yyyy')}
+                  {format(new Date(event.date), 'MMM dd, yyyy • h:mm a')}
                 </div>
                 <h3 className="event-title">{event.name}</h3>
+                <div className="event-organizer">
+                  <span className="organizer-label">By</span>
+                  <span className="organizer-name">{event.creator?.name || 'Unknown'}</span>
+                </div>
                 <p className="event-description">{event.description}</p>
                 <div className="event-details">
                   <span className="event-location">📍 {event.location}</span>
-                  <span className="event-attendees">👥 {event.attendees?.length || 0}</span>
+                </div>
+                <div className="event-footer">
+                  <div className="organizer">
+                    <h3>Organized by</h3>
+                    <p>{event.creator?.name || 'Unknown'}</p>
+                  </div>
+                  <div className="separator"></div>
+                  <div className="attendees">
+                    <h3>Attendees</h3>
+                    <p>👥 {event.attendees?.length || 0}</p>
+                  </div>
                 </div>
               </div>
             );

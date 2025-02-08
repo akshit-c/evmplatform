@@ -1,7 +1,7 @@
-import axios from 'axios';
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import axios from '../utils/axios';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -13,13 +13,21 @@ const Login = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const response = await axios.post('http://localhost:5001/api/auth/login', {
+      const response = await axios.post('/api/auth/login', {
         email,
         password,
       });
-      login(response.data.token);
-      navigate('/dashboard');
+      
+      console.log('Login response:', response.data);
+      
+      if (response.data.token) {
+        login(response.data.token);
+        navigate('/dashboard');
+      } else {
+        setError('No token received from server');
+      }
     } catch (err) {
+      console.error('Login error:', err);
       setError(err.response?.data?.message || 'Invalid email or password');
     }
   };

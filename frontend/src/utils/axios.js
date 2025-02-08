@@ -1,9 +1,7 @@
 import axios from 'axios';
 
-const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:5001';
-
 const instance = axios.create({
-  baseURL,
+  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5001',
   headers: {
     'Content-Type': 'application/json'
   }
@@ -46,6 +44,10 @@ instance.interceptors.response.use(
       status: error.response?.status,
       message: error.response?.data?.message || error.message
     });
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token');
+      window.location.href = '/login';
+    }
     return Promise.reject(error);
   }
 );

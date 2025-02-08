@@ -34,23 +34,20 @@ const Register = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
+    setError(''); // Reset error message
     setLoading(true);
 
     if (!validateForm()) {
+      setLoading(false); // Stop loading if validation fails
       return;
     }
 
     try {
-      console.log('Attempting registration with:', { name, email });
-      
-      const response = await axios.post('/api/auth/register', {
+      const response = await axios.post('http://localhost:5001/api/auth/register', {
         name: name.trim(),
         email: email.trim(),
         password: password
       });
-
-      console.log('Registration response:', response.data);
 
       if (response.data.token) {
         login(response.data.token);
@@ -59,23 +56,16 @@ const Register = () => {
         setError('Registration successful but no token received');
       }
     } catch (err) {
-      console.error('Registration error:', err);
-      
+      // Improved error handling
       if (err.response) {
-        // Server responded with error
-        setError(err.response.data.message);
-        console.error('Server error:', err.response.data);
-      } else if (err.request) {
-        // Request made but no response
-        setError('No response from server. Please check your connection.');
-        console.error('Network error:', err.request);
+        // Log the entire error response for debugging
+        console.error('Registration error response:', err.response);
+        setError(err.response.data.message || 'Registration failed. Please try again.');
       } else {
-        // Error setting up request
-        setError('Failed to make registration request');
-        console.error('Request setup error:', err.message);
+        setError('Registration failed. Please check your network connection.');
       }
     } finally {
-      setLoading(false);
+      setLoading(false); // Stop loading regardless of success or failure
     }
   };
 
