@@ -21,7 +21,6 @@ const ForgotPassword = () => {
       });
       
       if (response.data.resetToken) {
-        // Show message and redirect after a short delay
         setMessage('Password reset link generated. Redirecting...');
         setTimeout(() => {
           navigate(`/reset-password/${response.data.resetToken}`);
